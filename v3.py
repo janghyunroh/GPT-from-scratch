@@ -103,11 +103,43 @@ class MultiHeadAttention(nn.Module):
 
         # 위에서 정의된 head 들을 개수만큼 생성
         self.heads = nn.ModuleList([Head(head_size) for _ in range(num_heads)]) 
+        self.proj = nn.Linear(n_embd, n_embd)
 
     def forward(self, x):
 
+        out = torch.cat([h(x) for h in self.heads], dim=-1)
+        out = self.proj(out)
         # 병렬로 수행한 다음 이어붙이기
-        return torch.cat([h(x) for h in self.heads], dim=-1)
+        return out
+    
+class FeedForward(nn.Module):
+    """ Linear Layer 1개 """
+    
+    def __init__(self, n_embd):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_embd, 4 * n_embd),
+            nn.ReLU(),
+            nn.Linear(4 * n_embd, n_embd),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+    
+class Block(nn.Module):
+    """ 트랜스포머 블럭"""
+
+    def __init__(self, n_embd, n_head):
+        super().__init__()
+        head_size = n_embd // n_head
+        self.sa = MultiHeadAttention(n_head, head_size)
+        self.ffwd = FeedForward(n_embd)
+
+    def forward(self, x):
+        # skip connection도 구현 
+        x = x + self.sa(x)
+        x = x + self.ffwd(x)
+        return x
     
 class BigramLanguageModel(nn.Module):
 
@@ -117,8 +149,16 @@ class BigramLanguageModel(nn.Module):
         # 토큰 임베딩 테이블 정의
         self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
         self.position_embedding_table = nn.Embedding(context_length, n_embd)
-        #self.sa_head = Head(n_embd)
-        self.sa_heads = MultiHeadAttention(4, n_embd//4) 
+
+        self.blocks = nn.Sequential(
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+            Block(n_embd, n_head=4),
+        )
+        
+        # self.sa_head = Head(n_embd)
+        # self.sa_heads = MultiHeadAttention(4, n_embd//4) 
+        # self.ffwd = FeedForward(n_embd)
         self.lm_head = nn.Linear(n_embd, vocab_size)
 
     # target 여부를 optional로 두어야!
@@ -141,8 +181,19 @@ class BigramLanguageModel(nn.Module):
         
         # 두 임베딩을 더하여 최종 임베딩 구함
         x = tok_emb + pos_emb # (B, T, n_embd) + (T, n_embd) -> (B, T, n_embd)
+
         #x = self.sa_head(x) # one-head self-attention 거침
-        x = self.sa_heads(x)
+
+        # multi-head attention을 거침
+        #x = self.sa_heads(x)
+
+        # feed-forward 한 번 거침
+        # x = self.ffwd(x)
+
+        # attention 및 feed-forward를 3번 거침
+        x = self.blocks(x)
+
+        # logit 계산
         logits = self.lm_head(x) #(B, T, n_embd) -> (B, T, vocab_size)
 
         if targets is None:
