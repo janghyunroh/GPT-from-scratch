@@ -1,3 +1,9 @@
+# 변경점
+# 1. vocab_size가 전역적으로 정의되어 있으므로 모델에 따로 전달X
+# 2. 임베딩 벡터 크기를 별도로 두고 linear layer를 거침. (latent vector 과정을 거침)
+# -> logit을 곧바로 계산하지 않음음
+# 3. position embedding 추가가
+
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -10,6 +16,7 @@ eval_interval = 300
 learning_rate = 1e-2
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
+n_embd = 32 # 새로 추가!
 
 
 torch.manual_seed(1337)
@@ -68,11 +75,13 @@ def estimate_loss():
 
 class BigramLanguageModel(nn.Module):
 
-    def __init__(self, vocab_size):
+    def __init__(self):
         super().__init__()
 
         # 토큰 임베딩 테이블 정의
-        self.token_embedding_table = nn.Embedding(vocab_size, vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size, n_embd)
+        self.position_embedding_table = nn.Embedding(context_length, n_embd)
+        self.lm_head = nn.Linear(n_embd, vocab_size)
 
     # target 여부를 optional로 두어야!
     def forward(self, idx, targets=None):
@@ -85,8 +94,16 @@ class BigramLanguageModel(nn.Module):
         즉, C개의 문자가 각 (B, T)의 예측 target에 해당할 각각의 logit을 나타낸 것. 
         '''
         
-        # 토큰 임베딩 테이블을 lookup하여 logit 구함
-        logits = self.token_embedding_table(idx)
+        B, T = idx.shape
+        # 토큰 임베딩 테이블을 lookup하여 토큰 임베딩 진행
+        tok_emb = self.token_embedding_table(idx) # (B, T) -> (B, T, n_embd)
+
+        # 각 위치마다 차례대로 정수를 부여하여 위치 임베딩 진행(Bi-gram이라 지금 도움이 되진 않음.)
+        pos_emb = self.position_embedding_table(torch.arange(T, device=device)) # (0, 1, ... T - 1) 이 (T, C) 짜리 위치 임베딩 텐서가 됨
+        
+        # 두 임베딩을 더하여 최종 임베딩 구함
+        x = tok_emb + pos_emb # (B, T, n_embd) + (T, n_embd) -> (B, T, n_embd)
+        logits = self.lm_head(x) #(B, T, n_embd) -> (B, T, vocab_size)
 
         if targets is None:
             loss = None
@@ -138,7 +155,7 @@ class BigramLanguageModel(nn.Module):
     
 
     
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 m = model.to(device)
 
 # optimizer
